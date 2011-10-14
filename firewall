@@ -1,0 +1,123 @@
+#!/bin/bash 
+
+set -e
+modprobe ip_conntrack
+modprobe ip_conntrack_ftp
+
+flush_and_load_fw(){
+
+iptables --flush
+iptables -t nat --flush
+iptables -t mangle --flush
+iptables -t raw --flush
+
+ipset -F 
+ipset -X
+
+#Default policy ACCEPT till the fw is setup so that we dont get locked out
+iptables --policy INPUT ACCEPT
+iptables --policy FORWARD ACCEPT
+iptables --policy OUTPUT ACCEPT
+
+#Remove all user defined chains. Will fail if chain is referenced or not empty
+#iptables -F WEBMIN_ALLOW
+#iptables -F BACULA_ALLOW
+iptables -X
+
+#
+iptables -N WEBMIN_ALLOW
+iptables -A WEBMIN_ALLOW -j RETURN
+
+iptables -N BACULA_ALLOW
+iptables -A BACULA_ALLOW -j RETURN
+
+#Create blasklist ipsets
+ipset -N BLACKLIST iphash
+ipset -N BLACKLIST_TEMP iptree --timeout 86400
+
+#Populate ipsets
+#./populateipset.sh
+
+#Install ipsets in firewall raw table
+iptables -t raw -A PREROUTING -m set --set BLACKLIST src -j LOG --log-prefix "BLACKLISTED PERMANENT "
+iptables -t raw -A PREROUTING -m set --set BLACKLIST src -j DROP
+ 
+iptables -t raw -A PREROUTING -m set --set BLACKLIST_TEMP src -j LOG --log-prefix "BLACKLISTED TEMP "
+iptables -t raw -A PREROUTING -m set --set BLACKLIST_TEMP src -j DROP
+
+
+
+#Firewall Body
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -m comment --comment "__AUTOFW__"
+iptables -A INPUT -p tcp --dport 80 -m state --state NEW -j ACCEPT		### WEB
+iptables -A INPUT -p tcp --dport 443 -m state --state NEW -j ACCEPT		### WEB SSL
+iptables -A INPUT -p tcp --dport 25 -m state --state NEW -j ACCEPT		### POSTFIX
+#iptables -A INPUT -p tcp --dport 21 -m state --state NEW -j DROP		### FTP
+iptables -A INPUT -p tcp --dport 22 -m state --state NEW -j ACCEPT 		### SSH
+iptables -A INPUT -p udp --dport 53 -m state --state NEW -j DROP		### BIND
+iptables -A INPUT -p tcp --dport 53 -m state --state NEW -j DROP		### BIND
+#iptables -A INPUT -p tcp --dport 1194 -m state --state NEW -j ACCEPT            ### openvpn
+#iptables -A INPUT -d 192.168.0.31 -p tcp --dport 3306 -m state --state NEW -j ACCEPT		### Mysql Replication 
+
+
+iptables -A INPUT -m pkttype --pkt-type broadcast -j DROP
+iptables -A INPUT -m pkttype --pkt-type multicast -j DROP
+iptables -A INPUT -j LOG
+
+#Now that the fw is setup define default policy
+iptables --policy INPUT DROP
+iptables --policy FORWARD DROP
+iptables --policy OUTPUT ACCEPT
+}
+
+flush_fw(){
+iptables --flush
+iptables -t nat --flush
+iptables -t mangle --flush
+iptables -t raw --flush
+
+iptables --policy INPUT ACCEPT
+iptables --policy FORWARD ACCEPT
+iptables --policy OUTPUT ACCEPT
+
+iptables -F 
+iptables -X 
+
+ipset -F
+ipset -X
+}
+
+show_fw(){
+ipset -L 
+
+iptables -t raw -L -n -v --line-numbers
+
+iptables -t nat -L -n -v --line-numbers
+
+iptables -L -n -v --line-numbers
+}
+
+case "$1" in
+
+  start)
+        flush_and_load_fw
+        ;;
+  stop)
+        flush_fw
+        ;;
+  restart|reload|force-reload)
+        flush_and_load_fw
+        ;;
+  show)
+        show_fw
+        ;;
+  *)
+  echo "$0 {start|stop|restart|reload|force-reload|show}"
+  exit 1
+        ;;
+esac
+
+exit 0
+
